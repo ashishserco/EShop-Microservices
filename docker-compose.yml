@@ -1,0 +1,153 @@
+services:
+  distributedcache:
+    image: redis
+    restart: always
+    ports:
+      - 6379:6379
+
+  catalog.db:
+    image: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=catalog
+    restart: always
+    ports:
+      - 5432:5432
+    volumes:
+      - catalog_data:/var/lib/postgresql/data
+
+  catalog.api:
+    image: ghanem22/catalog-api:latest
+    build:
+      context: .
+      dockerfile: src/Services/Catalog.API/Dockerfile
+    ports:
+      - 5001:80
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - ConnectionStrings__DefaultConnection=Server=catalog.db;Port=5432;Database=catalog;User Id=postgres;Password=postgres;Include Error Detail=true
+    depends_on:
+      - catalog.db
+
+  basket.db:
+    image: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=basket
+    restart: always
+    ports:
+      - 5433:5432
+    volumes:
+      - basket_data:/var/lib/postgresql/data
+
+  basket.api:
+    image: ghanem22/basket-api:latest
+    build:
+      context: .
+      dockerfile: src/Services/Basket.API/Dockerfile
+    ports:
+      - 5002:80
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - ConnectionStrings__DefaultConnection=Server=basket.db;Port=5432;Database=basket;User Id=postgres;Password=postgres;Include Error Detail=true
+      - ConnectionStrings__Redis=distributedcache
+      - GrpcSettings__DiscountUrl=http://discount.grpc
+      - MessageBroker__Host=amqp://ecommerce-mq:5672
+      - MessageBroker__UserName=guest
+      - MessageBroker__Password=guest
+    depends_on:
+      - basket.db
+      - distributedcache
+      - discount.grpc
+      - messagebroker
+
+  discount.grpc:
+    image: ghanem22/discount-grpc:latest
+    build:
+      context: .
+      dockerfile: src/Services/Discount.Grpc/Dockerfile
+    ports:
+      - 5003:80
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - ConnectionStrings__DefaultConnection=Data Source=Discount.db
+      - Kestrel__EndpointDefaults__Protocols=Http2
+
+  order.db:
+    image: postgres
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=ordering
+    ports:
+      - 5434:5432
+    volumes:
+      - ordering_data:/var/lib/postgresql/data
+
+  messagebroker:
+    image: rabbitmq:management
+    hostname: ecommerce-mq
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    restart: always
+    ports:
+      - 5672:5672
+      - 15672:15672
+
+  ordering.api:
+    image: ghanem22/ordering-api:latest
+    build:
+      context: .
+      dockerfile: src/Services/Ordering/Ordering.API/Dockerfile
+    ports:
+      - 5004:80
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - ConnectionStrings__DefaultConnection=Server=order.db;Port=5432;Database=ordering;User Id=postgres;Password=postgres;Include Error Detail=true
+      - MessageBroker__Host=amqp://ecommerce-mq:5672
+      - MessageBroker__UserName=guest
+      - MessageBroker__Password=guest
+      - FeatureManagement__OrderFullfilment=false
+    depends_on:
+      - order.db
+      - messagebroker
+  api-gateway:
+    image: ghanem22/api-gateway:latest
+    build:
+      context: .
+      dockerfile: src/ApiGateway/Dockerfile
+    ports:
+      - 5005:80
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+    depends_on:
+      - catalog.api
+      - basket.api
+      - ordering.api
+  shopping.web:
+    image: ghanem22/shopping-web:latest
+    build:
+      context: .
+      dockerfile: src/WebApps/Shopping.Web/Dockerfile
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - ApiSettings__GatewayAddress=http://api-gateway
+    depends_on:
+      - api-gateway
+    ports:
+      - 5100:80
+
+volumes:
+  catalog_data:
+  basket_data:
+  ordering_data:
